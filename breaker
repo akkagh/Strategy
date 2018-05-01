@@ -1,7 +1,7 @@
 """""
 # -*- coding: utf-8 -*-
 #made in china by me named laoK
-#简易R-breaker
+#简易breaker
 """""
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -17,9 +17,9 @@ from pyalgotrade import plotter
 from pyalgotrade.technical import ma
 from pyalgotrade.technical import stats
 
-class Aberration(strategy.BacktestingStrategy):
+class breaker(strategy.BacktestingStrategy):
     def __init__(self, feed,instrument,milk,brk):
-        super(Aberration, self).__init__(feed,brk)
+        super(breaker, self).__init__(feed,brk)
         self.data1=pd.read_csv('D:\huobidataKlines/RB888day.csv')
         self.__instrument = instrument
         self.__priceDS = feed[instrument].getPriceDataSeries()
@@ -160,7 +160,7 @@ def main(plot):
     brk = broker.backtesting.Broker(1000000, feed, broker_commission)
     brk.setFillStrategy(fill_stra)
 
-    strat = Aberration(feed, instrument,milk,brk)
+    strat =breaker(feed, instrument,milk,brk)
     sharpeRatioAnalyzer = sharpe.SharpeRatio()#夏普
     retAnalyzer = returns.Returns()#回测分析
     trdAnalyzer = trades.Trades()#交易分析
