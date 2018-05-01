@@ -1,0 +1,237 @@
+# -*- coding: utf-8 -*-
+#made in china by me named laoK
+# -*- coding: utf-8 -*-
+#made in china by me named laoK
+
+'''''
+海龟法则
+'''''
+import pandas
+from pyalgotrade import strategy
+from pyalgotrade.bar import Frequency
+from pyalgotrade.stratanalyzer import returns
+from pyalgotrade.barfeed.csvfeed import GenericBarFeed
+from pyalgotrade.stratanalyzer import sharpe
+from pyalgotrade.stratanalyzer import trades
+from pyalgotrade.stratanalyzer import drawdown
+from pyalgotrade import broker
+from pyalgotrade import plotter
+from pyalgotrade.technical import ma
+from pyalgotrade.technical import stats
+
+class Aberration(strategy.BacktestingStrategy):
+    def __init__(self, feed, instrument,Length,StdDevUp ,brk):
+        super(Aberration, self).__init__(feed,brk)
+        self.__instrument = instrument
+        self.__priceDS = feed[instrument].getCloseDataSeries()
+        self.__aveSMA = ma.SMA(self.__priceDS, Length)
+        self.__StdValue = stats.StdDev(self.__priceDS, Length)
+        self.__money = self.getBroker().getCash()
+        self.StdDevUp=StdDevUp
+        self.UpperBand = []
+        self.LowerBand = []
+        self.closelist = []
+        self.__longPos = None
+        self.__shortPos = None
+
+    def getmoney(self):
+        return self.__money
+
+    def getStdValue(self):
+        return self.__StdValue
+
+    def getaveSMA(self):
+        return self.__aveSMA
+
+    def onEnterOk(self, position):
+        execInfo = position.getEntryOrder().getExecutionInfo()
+        #self.info("%s" % (execInfo.getDateTime()))#时间
+        if self.__longPos :
+            self.info("long at ¥%s" % (execInfo.getPrice()))  # 进场价格
+        elif self.__shortPos :
+            self.info("short at ¥%s" % (execInfo.getPrice()))  # 进场价格
+        else:
+            assert(False)
+
+        #self.info("%f" % (execInfo.getCommission()))#手续费
+        #self.info("%f" % (position.getShares()))  # 手数(pyalgotrade的回测系统默认最大成交手数只能是当期成交量的25%）getActiveOrders
+        #self.info("%f" % (position.getLastPrice()))  # bar[0]的收盘价
+        #self.info("%s" % (position. getStrategy()))#策略名称getActiveOrders
+        #self.info("%s" % (position.getReturn()))
+        #self.info("d%s" % (self.getBroker()._getCurrentDateTime()))#跟上面的时间一样，都是进场对应bar的时间
+
+
+    def onEnterCanceled(self, position):
+        if self.__longPos == position:
+            self.__longPos = None
+        elif self.__shortPos == position:
+            self.__shortPos = None
+        else:
+            assert(False)
+
+    def onExitOk(self, position):
+        execInfo = position.getExitOrder().getExecutionInfo()
+        if self.__longPos == position:
+            self.__longPos = None
+            self.info("sell at ¥%s" % (execInfo.getPrice()))  # 进场价格
+        elif self.__shortPos == position:
+            self.__shortPos = None
+            self.info("buytocover at ¥%s" % (execInfo.getPrice()))  # 进场价格
+        else:
+            assert(False)
+        #portfolioValue = self.getBroker().getEquity()
+        #self.info("Portfolio value: $%.2f" % (portfolioValue))
+
+    def onExitCanceled(self, position):
+        # If the exit was canceled, re-submit it.
+        position.exitMarket()
+
+    def onBars(self, bars):
+        # Wait for enough bars to be available to calculate SMA and RSI.
+        if self.__aveSMA[-1] is None :
+            return
+
+        bar = bars[self.__instrument]
+
+        if self.__aveSMA[-1] is not None:
+            self.UpperBand.append(self.__aveSMA[-1] + self.StdDevUp * self.__StdValue[-1])
+            self.LowerBand.append(self.__aveSMA[-1] - self.StdDevUp * self.__StdValue[-1])
+            self.closelist.append(bar.getPrice())
+
+        if self.__shortPos is  None and self.enterShortSignal(bar):
+            if self.__longPos is not None:
+                self.__longPos.exitMarket()
+            shares = 100  # self.__money / (bars[self.__instrument].getPrice() )
+            self.__shortPos = self.enterShort(self.__instrument, shares, True)
+
+        elif self.__longPos is  None and self.enterLongSignal(bar):
+            if self.__shortPos is not None:
+                self.__shortPos.exitMarket()
+            shares = 100  # self.__money / (bars[self.__instrument].getPrice() )
+            self.__longPos = self.enterLong(self.__instrument, shares, True)
+
+        elif self.__longPos is not None and self.exitLongSignal(bar):
+            self.__longPos.exitMarket()
+
+        elif self.__shortPos is not None and self.exitShortSignal(bar):
+            self.__shortPos.exitMarket()
+
+    def enterLongSignal(self, bar):
+        if self.__aveSMA[-2] is not None:
+            if self.closelist[-1] >self.UpperBand[-1]   and self.closelist[-2]  <self.UpperBand[-2]:
+                return True
+        else:
+            return False
+
+    def exitLongSignal(self, bar):
+        if not self.__longPos.exitActive():
+            if bar.getPrice()<self.__aveSMA[-1]:
+                return True
+        else:
+            return False
+
+    def enterShortSignal(self, bar):
+        if self.__aveSMA[-2] is not None:
+            if self.closelist[-1] <self.LowerBand[-1]   and self.closelist[-2]  >self.LowerBand[-2]:
+                return True
+        else:
+            return False
+
+    def exitShortSignal(self, bar):
+        if not self.__shortPos.exitActive():
+            if bar.getPrice() > self.__aveSMA[-1]:
+                return True
+        else:
+            return False
+def main(plot):
+    instrument = "rb1Hour"
+    Length=35
+    StdDevUp=2
+
+    feed = GenericBarFeed(Frequency.HOUR, None, None)
+    feed.addBarsFromCSV(instrument, 'D:/huobidataKlines/rb8881.csv')
+    # 3.broker setting
+    # 3.1 commission类设置
+    #broker_commission = broker.backtesting.NoCommission()  # 无手续费
+    broker_commission = broker.backtesting.TradePercentage(0.00015)  # 交易金额的0.0001
+    #broker_commission = broker.backtesting.FixedPerTrade(amount)  # 每笔交易手续费是固定的
+    # 3.2 fill strategy设置
+    fill_stra = broker.fillstrategy.DefaultStrategy(volumeLimit=0.1)#成交限制，默认0.25
+    sli_stra = broker.slippage.NoSlippage()#无滑点
+    #sli_stra = broker.slippage.VolumeShareSlippage(priceImpact=0.1)#priceImpact(float.) – 你的订单对交易价格的影响程度有多大。
+    fill_stra.setSlippageModel(sli_stra)
+    brk = broker.backtesting.Broker(1000000, feed, broker_commission)
+    brk.setFillStrategy(fill_stra)
+
+    strat = Aberration(feed, instrument,Length,StdDevUp,brk)
+
+    sharpeRatioAnalyzer = sharpe.SharpeRatio()#夏普
+    retAnalyzer = returns.Returns()#回测分析
+    trdAnalyzer = trades.Trades()#交易分析
+    draAnalyzer = drawdown.DrawDown()#
+    strat.attachAnalyzer(retAnalyzer)
+    strat.attachAnalyzer(trdAnalyzer)
+    strat.attachAnalyzer(sharpeRatioAnalyzer)
+    strat.attachAnalyzer(draAnalyzer)
+
+    if plot:
+        plt = plotter.StrategyPlotter(strat, True, True, True)
+
+    strat.run()
+    print("Sharpe ratio: %.3f" % sharpeRatioAnalyzer.getSharpeRatio(0.05))#夏普
+    print("Final portfolio value: ¥%.2f" % strat.getResult())#getBroker().getEquity()) 跟geResult一样效果
+    print("Anual return: %.3f %%" % (retAnalyzer.getCumulativeReturns()[-1] * 100))#年回测
+    print("Max. drawdown: %.2f %%" % (draAnalyzer.getMaxDrawDown() * 100))
+    print("Longest drawdown duration: %s" % (draAnalyzer.getLongestDrawDownDuration()))
+    print('============================')
+    print('交易总览')
+    print('交易次数：%d' % (trdAnalyzer.getCount()))  # 交易次数
+    print('盈利次数：%d' % (trdAnalyzer.getProfitableCount()))  # 盈利次数
+    print('亏损次数：%d' % (trdAnalyzer.getUnprofitableCount()))  # 亏损次数
+    print('保本次数：%d' % (trdAnalyzer.getEvenCount()))  # 保本次数
+    print('----------------------------')
+    Totalinfo=trdAnalyzer.getAll()#
+    print("Avg. profit: ¥%2.f" % (Totalinfo.mean()))#
+    print("Profits std. dev.: ¥%2.f" % (Totalinfo.std()))
+    print("Max. profit: ¥%2.f" % (Totalinfo.max()))
+    print("Min. profit: ¥%2.f" % (Totalinfo.min()))
+    print('----------------------------')
+    Totalreturns = trdAnalyzer.getAllReturns()
+    print("Avg. return: %2.f %%" % (Totalreturns.mean() * 100))
+    print("Returns std. dev.: %2.f %%" % (Totalreturns.std() * 100))
+    print("Max. return: %2.f %%" % (Totalreturns.max() * 100))
+    print("Min. return: %2.f %%" % (Totalreturns.min() * 100))
+    print('============================')
+    profits = trdAnalyzer.getProfits()#盈利分析
+    print("Avg. profit: ¥%2.f" % (profits.mean()))
+    print("Profits std. dev.: ¥%2.f" % (profits.std()))
+    print("Max. profit: ¥%2.f" % (profits.max()))
+    print("MAX. loss: ¥%2.f" % (profits.min()))
+    Preturns = trdAnalyzer.getPositiveReturns()
+    print('----------------------------')
+    print("Avg. return: %2.f %%" % (Preturns.mean() * 100))
+    print("Returns std. dev.: %2.f %%" % (Preturns.std() * 100))
+    print("Max. return: %2.f %%" % (Preturns.max() * 100))
+    print("Min. return: %2.f %%" % (Preturns.min() * 100))
+    print('============================')
+    losses = trdAnalyzer.getLosses()#亏损分析
+    print("Avg. loss: ¥%2.f" % (losses.mean()))
+    print("Losses std. dev.: ¥%2.f" % (losses.std()))
+    print("Max. loss: ¥%2.f" % (losses.min()))
+    print("Min. loss: ¥%2.f" % (losses.max()))
+    Lreturns = trdAnalyzer.getNegativeReturns()
+    print('----------------------------')
+    print("Avg. return: %2.f %%" % (Lreturns.mean() * 100))
+    print("Returns std. dev.: %2.f %%" % (Lreturns.std() * 100))
+    print("Max. return: %2.f %%" % (Lreturns.max() * 100))
+    print("Min. return: %2.f %%" % (Lreturns.min() * 100))
+    print('============================')
+
+    if plot:
+        plt.plot()
+
+
+if __name__ == "__main__":
+    main(True)
+
+
